@@ -6,6 +6,8 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Microsoft", "Microsoft", "{
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "A2AFoundryHost", "Microsoft\A2AFoundryHost\A2AFoundryHost.csproj", "{2D901E58-5A56-F0F4-2A06-91D488AE4402}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "A2AFoundryClient", "Microsoft\A2AFoundryClient\A2AFoundryClient.csproj", "{8B4E7A3C-1D2F-4E5A-9C8B-6F7E0A1B2D3E}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -16,12 +18,17 @@ Global
 		{2D901E58-5A56-F0F4-2A06-91D488AE4402}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{2D901E58-5A56-F0F4-2A06-91D488AE4402}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{2D901E58-5A56-F0F4-2A06-91D488AE4402}.Release|Any CPU.Build.0 = Release|Any CPU
+		{8B4E7A3C-1D2F-4E5A-9C8B-6F7E0A1B2D3E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{8B4E7A3C-1D2F-4E5A-9C8B-6F7E0A1B2D3E}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{8B4E7A3C-1D2F-4E5A-9C8B-6F7E0A1B2D3E}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{8B4E7A3C-1D2F-4E5A-9C8B-6F7E0A1B2D3E}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{2D901E58-5A56-F0F4-2A06-91D488AE4402} = {C3500E5F-A296-6C57-D65F-9820BC3035C7}
+		{8B4E7A3C-1D2F-4E5A-9C8B-6F7E0A1B2D3E} = {C3500E5F-A296-6C57-D65F-9820BC3035C7}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {685937C5-3761-4EB6-B2FB-55E5C7E27772}

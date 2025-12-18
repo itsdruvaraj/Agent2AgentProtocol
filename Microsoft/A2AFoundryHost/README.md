@@ -4,7 +4,7 @@ A simple ASP.NET Core application that hosts an Azure AI Foundry agent via the A
 
 ## Prerequisites
 
-- .NET 9 SDK
+- .NET 10 SDK
 - Azure AI Foundry project with a deployed agent
 - Azure CLI authenticated (`az login`)
 
@@ -16,6 +16,12 @@ Set the following environment variables:
 $env:AZURE_FOUNDRY_PROJECT_ENDPOINT = "https://your-project.services.ai.azure.com/api/projects/your-project"
 $env:AZURE_FOUNDRY_AGENT_ID = "your-agent-id"
 ```
+
+### MCP Tool Authorization
+
+If your agent uses MCP tools that require Bearer token authentication, configure the token **in Azure AI Foundry** when creating/updating the agent, or use `HostedMcpServerTool.AuthorizationToken` when creating a new agent programmatically.
+
+> **Note:** Runtime header injection for pre-existing Foundry agents is not currently supported in the .NET SDK. Headers must be configured at agent creation time.
 
 ## Run
 
