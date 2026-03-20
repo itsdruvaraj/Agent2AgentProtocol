@@ -1,6 +1,6 @@
 # A2A Foundry Client
 
-A client application that connects to the A2AFoundryHost server using the Agent-to-Agent (A2A) protocol to invoke Azure AI Foundry agents.
+An interactive CLI client that connects to the A2AFoundryHost server using the [A2A (Agent-to-Agent) protocol](https://google.github.io/A2A/) to invoke Azure AI Foundry agents.
 
 ## Overview
 
@@ -12,27 +12,27 @@ This client demonstrates how to:
 
 ## Prerequisites
 
-- .NET 10.0 SDK
+- .NET 10 SDK
 - A running A2AFoundryHost server
 
 ## Configuration
 
-The client can be configured using environment variables or user secrets:
+The client can be configured using `appsettings.json`, environment variables, or user secrets:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `A2A_SERVER_URL` | URL of the A2A server | `http://localhost:5000` |
+| `A2A_SERVER_URL` | URL of the A2A server | `http://localhost:57695` |
 
 ### Using Environment Variables
 
-```bash
-export A2A_SERVER_URL=http://localhost:5000
+```powershell
+$env:A2A_SERVER_URL = "http://localhost:57695"
 ```
 
 ### Using User Secrets
 
 ```bash
-dotnet user-secrets set "A2A_SERVER_URL" "http://localhost:5000"
+dotnet user-secrets set "A2A_SERVER_URL" "http://localhost:57695"
 ```
 
 ## Running the Client
@@ -50,7 +50,7 @@ dotnet user-secrets set "A2A_SERVER_URL" "http://localhost:5000"
 
 3. The client will:
    - Connect to the A2A server
-   - Fetch and display the agent card
+   - Fetch and display the agent card from `/.well-known/agent-card.json`
    - Start an interactive chat session
 
 ## Usage
@@ -59,12 +59,14 @@ Once running, you can:
 - Type messages to interact with the agent
 - Type `:q`, `quit`, or `exit` to end the session
 
-## A2A Protocol
+## A2A v1 Protocol
 
-This client uses the Agent-to-Agent (A2A) protocol which provides:
-- **Agent Discovery**: Fetch agent capabilities via `/v1/card`
-- **Message Exchange**: Send/receive messages via A2A endpoints
-- **Streaming Support**: Real-time response streaming when supported by the agent
+This client uses the `A2A` NuGet package at version **1.0.0-preview** (A2A v1 spec), which provides:
+- **Agent Discovery**: Fetch agent capabilities via `/.well-known/agent-card.json`
+- **Message Exchange**: Send/receive messages via JSON-RPC (`SendMessage`, `SendStreamingMessage`)
+- **Streaming Support**: Real-time SSE response streaming when supported by the agent
+
+> **Note:** This client is **not compatible** with A2A v0.3 servers (which use `message/send` method names and `/.well-known/agent.json`). Both client and server must use the same A2A spec version. See the [migration guide](https://github.com/a2aproject/a2a-dotnet/blob/main/docs/migration-guide-v1.md) for details on v0.3 → v1 differences.
 
 ## Architecture
 
@@ -72,9 +74,9 @@ This client uses the Agent-to-Agent (A2A) protocol which provides:
 ┌─────────────────────┐         ┌─────────────────────┐
 │   A2AFoundryClient  │  A2A    │   A2AFoundryHost    │
 │   (This Project)    │────────►│   (Agent Server)    │
-│                     │         │                     │
-│  - A2AClient        │         │  - AIAgent          │
-│  - Interactive CLI  │         │  - AgentCard        │
+│                     │  v1     │                     │
+│  - A2AClient        │         │  - FoundryAgentHandler
+│  - Interactive CLI  │         │  - AutoApprovingAgent
 └─────────────────────┘         └─────────────────────┘
                                           │
                                           ▼

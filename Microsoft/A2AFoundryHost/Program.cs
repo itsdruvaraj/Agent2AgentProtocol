@@ -8,6 +8,7 @@ using Azure.Identity;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using System.Runtime.CompilerServices;
+using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddHttpClient().AddLogging();
@@ -60,7 +61,6 @@ var agentCard = new AgentCard
     Name = persistentAgent.Name ?? "Foundry Agent",
     Description = persistentAgent.Description ?? "Azure AI Foundry Agent with A2A",
     Version = "1.0.0",
-    Url = "http://localhost:5000/",
     Capabilities = new AgentCapabilities
     {
         Streaming = true,
@@ -81,108 +81,160 @@ var agentCard = new AgentCard
     ]
 };
 
-// Map A2A endpoints
-app.MapA2A(
-    autoApprovingAgent,
-    path: "/",
-    agentCard: agentCard,
-    taskManager => app.MapWellKnownAgentCard(taskManager, "/"));
+// Create A2A server with our agent handler
+var agentHandler = new FoundryAgentHandler(autoApprovingAgent);
+var a2aServer = new A2AServer(
+    agentHandler,
+    new InMemoryTaskStore(),
+    new ChannelEventNotifier(),
+    app.Services.GetRequiredService<ILogger<A2AServer>>());
+
+// Map A2A JSON-RPC endpoint
+app.MapA2A(a2aServer, "/");
+
+// Map well-known agent card endpoint for discovery
+app.MapWellKnownAgentCard(agentCard, "/");
 
 Console.WriteLine($"A2A Server running with agent: {agentCard.Name}");
 Console.WriteLine("Endpoints:");
-Console.WriteLine("  - Agent Card: /v1/card");
+Console.WriteLine("  - Agent Card: /.well-known/agent-card.json");
 Console.WriteLine("  - A2A Messages: /");
 
 await app.RunAsync();
 
-// Auto-approving wrapper that automatically approves MCP tool calls
-public class AutoApprovingAgentWrapper : AIAgent
+// IAgentHandler implementation that bridges AIAgent to A2A protocol
+public class FoundryAgentHandler : IAgentHandler
 {
-    private readonly AIAgent _innerAgent;
+    private readonly AIAgent _agent;
 
-    public AutoApprovingAgentWrapper(AIAgent innerAgent)
+    public FoundryAgentHandler(AIAgent agent) => _agent = agent;
+
+    public async Task ExecuteAsync(RequestContext context, AgentEventQueue events, CancellationToken cancellationToken)
     {
-        _innerAgent = innerAgent;
+        var taskUpdater = new TaskUpdater(events, context.TaskId ?? Guid.NewGuid().ToString(), context.ContextId ?? "");
+        await taskUpdater.StartWorkAsync(new Message { Role = Role.Agent, Parts = [Part.FromText("Processing...")] }, cancellationToken);
+
+        try
+        {
+            var session = await _agent.CreateSessionAsync(cancellationToken);
+            var userMessage = new ChatMessage(ChatRole.User, context.UserText ?? "");
+
+            if (context.StreamingResponse)
+            {
+                var fullText = new StringBuilder();
+                await foreach (var update in _agent.RunStreamingAsync(userMessage, session, cancellationToken: cancellationToken))
+                {
+                    if (update.Text is { } text)
+                    {
+                        fullText.Append(text);
+                        await events.EnqueueStatusUpdateAsync(new TaskStatusUpdateEvent
+                        {
+                            TaskId = taskUpdater.TaskId,
+                            ContextId = taskUpdater.ContextId,
+                            Status = new A2A.TaskStatus
+                            {
+                                State = TaskState.Working,
+                                Message = new Message { Role = Role.Agent, Parts = [Part.FromText(text)] }
+                            }
+                        }, cancellationToken);
+                    }
+                }
+
+                await taskUpdater.CompleteAsync(new Message
+                {
+                    Role = Role.Agent,
+                    Parts = [Part.FromText(fullText.ToString())]
+                }, cancellationToken);
+            }
+            else
+            {
+                var response = await _agent.RunAsync(userMessage, session, cancellationToken: cancellationToken);
+                await taskUpdater.CompleteAsync(new Message
+                {
+                    Role = Role.Agent,
+                    Parts = [Part.FromText(response.Text ?? "")]
+                }, cancellationToken);
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[FoundryAgentHandler] Error: {ex}");
+            await taskUpdater.FailAsync(new Message
+            {
+                Role = Role.Agent,
+                Parts = [Part.FromText($"Error: {ex.Message}")]
+            }, cancellationToken);
+        }
     }
 
-    public override string Id => _innerAgent.Id ?? string.Empty;
-    public override string? Name => _innerAgent.Name;
-    public override string? Description => _innerAgent.Description;
+    public Task CancelAsync(RequestContext context, AgentEventQueue events, CancellationToken cancellationToken)
+    {
+        events.Complete();
+        return Task.CompletedTask;
+    }
+}
 
-    public override AgentThread GetNewThread() => _innerAgent.GetNewThread();
+// Auto-approving wrapper that automatically approves MCP tool calls
+public class AutoApprovingAgentWrapper : DelegatingAIAgent
+{
+    public AutoApprovingAgentWrapper(AIAgent innerAgent) : base(innerAgent) { }
 
-    public override AgentThread DeserializeThread(System.Text.Json.JsonElement threadState, System.Text.Json.JsonSerializerOptions? options = null)
-        => _innerAgent.DeserializeThread(threadState, options) ?? throw new InvalidOperationException("Failed to deserialize thread");
-
-    public override async Task<AgentRunResponse> RunAsync(
+    protected override async Task<AgentResponse> RunCoreAsync(
         IEnumerable<ChatMessage> messages,
-        AgentThread? thread = null,
+        AgentSession? session = null,
         AgentRunOptions? options = null,
         CancellationToken cancellationToken = default)
     {
-        var response = await _innerAgent.RunAsync(messages, thread, options, cancellationToken);
+        var response = await InnerAgent.RunAsync(messages, session, options, cancellationToken);
         
         // Keep running until we get a final response (no more approval requests)
-        while (response.UserInputRequests?.Any() == true)
+        var approvalRequests = GetApprovalRequests(response);
+        while (approvalRequests.Count > 0)
         {
-            var approvalRequests = response.UserInputRequests
-                .OfType<McpServerToolApprovalRequestContent>()
-                .ToList();
-
-            if (approvalRequests.Count == 0)
-                break; // No MCP approvals pending, return as-is
-
-            Console.WriteLine($"[AutoApprove] Auto-approving {approvalRequests.Count} MCP tool call(s)");
+            Console.WriteLine($"[AutoApprove] Auto-approving {approvalRequests.Count} tool call(s)");
 
             // Create approval responses
             var approvalMessages = approvalRequests
                 .Select(req =>
                 {
-                    Console.WriteLine($"  - Approving: {req.ToolCall.ServerName}/{req.ToolCall.ToolName}");
+                    LogApproval(req);
                     return new ChatMessage(ChatRole.User, [req.CreateResponse(approved: true)]);
                 })
                 .ToList();
 
             // Continue the conversation with approvals
-            response = await _innerAgent.RunAsync(approvalMessages, thread, options, cancellationToken);
+            response = await InnerAgent.RunAsync(approvalMessages, session, options, cancellationToken);
+            approvalRequests = GetApprovalRequests(response);
         }
 
         Console.WriteLine($"[AutoApprove] Final response: {response.Text?.Substring(0, Math.Min(100, response.Text?.Length ?? 0))}...");
         return response;
     }
 
-    public override async IAsyncEnumerable<AgentRunResponseUpdate> RunStreamingAsync(
+    protected override async IAsyncEnumerable<AgentResponseUpdate> RunCoreStreamingAsync(
         IEnumerable<ChatMessage> messages,
-        AgentThread? thread = null,
+        AgentSession? session = null,
         AgentRunOptions? options = null,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         var pendingApprovals = new List<McpServerToolApprovalRequestContent>();
         
-        await foreach (var update in _innerAgent.RunStreamingAsync(messages, thread, options, cancellationToken))
+        await foreach (var update in InnerAgent.RunStreamingAsync(messages, session, options, cancellationToken))
         {
-            // Collect any approval requests
-            if (update.UserInputRequests?.Any() == true)
-            {
-                var approvalRequests = update.UserInputRequests
-                    .OfType<McpServerToolApprovalRequestContent>()
-                    .ToList();
-                
-                pendingApprovals.AddRange(approvalRequests);
-            }
-            
+            // Collect any approval requests from update contents
+            pendingApprovals.AddRange(update.Contents.OfType<McpServerToolApprovalRequestContent>());
             yield return update;
         }
 
         // If we have pending approvals, auto-approve and continue
         while (pendingApprovals.Count > 0)
         {
-            Console.WriteLine($"[AutoApprove-Streaming] Auto-approving {pendingApprovals.Count} MCP tool call(s)");
+            Console.WriteLine($"[AutoApprove-Streaming] Auto-approving {pendingApprovals.Count} tool call(s)");
 
             var approvalMessages = pendingApprovals
                 .Select(req =>
                 {
-                    Console.WriteLine($"  - Approving: {req.ToolCall.ServerName}/{req.ToolCall.ToolName}");
+                    LogApproval(req);
                     return new ChatMessage(ChatRole.User, [req.CreateResponse(approved: true)]);
                 })
                 .ToList();
@@ -190,20 +242,24 @@ public class AutoApprovingAgentWrapper : AIAgent
             pendingApprovals.Clear();
 
             // Continue with approvals
-            await foreach (var update in _innerAgent.RunStreamingAsync(approvalMessages, thread, options, cancellationToken))
+            await foreach (var update in InnerAgent.RunStreamingAsync(approvalMessages, session, options, cancellationToken))
             {
-                if (update.UserInputRequests?.Any() == true)
-                {
-                    var newApprovals = update.UserInputRequests
-                        .OfType<McpServerToolApprovalRequestContent>()
-                        .ToList();
-                    
-                    pendingApprovals.AddRange(newApprovals);
-                }
-                
+                pendingApprovals.AddRange(update.Contents.OfType<McpServerToolApprovalRequestContent>());
                 yield return update;
             }
         }
+    }
+
+    private static List<McpServerToolApprovalRequestContent> GetApprovalRequests(AgentResponse response)
+        => response.Messages
+            .SelectMany(m => m.Contents)
+            .OfType<McpServerToolApprovalRequestContent>()
+            .ToList();
+
+    private static void LogApproval(McpServerToolApprovalRequestContent req)
+    {
+        var name = $"{req.ToolCall.ServerName}/{req.ToolCall.ToolName}";
+        Console.WriteLine($"  - Approving: {name}");
     }
 }
 

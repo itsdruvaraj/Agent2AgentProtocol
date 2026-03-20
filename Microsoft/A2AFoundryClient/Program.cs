@@ -2,18 +2,16 @@
 // This client connects to the A2AFoundryHost server and invokes the agent using the A2A protocol
 
 using A2A;
-using Microsoft.Agents.AI;
-using Microsoft.Agents.AI.A2A;
-using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Configuration;
 
 // Configuration
 IConfigurationRoot configuration = new ConfigurationBuilder()
+    .AddJsonFile("appsettings.json", optional: true)
     .AddEnvironmentVariables()
     .AddUserSecrets<Program>(optional: true)
     .Build();
 
-string serverUrl = configuration["A2A_SERVER_URL"] ?? "http://localhost:5000";
+string serverUrl = configuration["A2A_SERVER_URL"] ?? "http://localhost:57695";
 
 Console.WriteLine("╔══════════════════════════════════════════════════════════╗");
 Console.WriteLine("║        A2A Foundry Client - Agent-to-Agent Protocol      ║");
@@ -38,12 +36,9 @@ Console.WriteLine($"│ Streaming: {(agentCard.Capabilities?.Streaming == true ?
 Console.WriteLine("└──────────────────────────────────────────────────────────┘");
 Console.WriteLine();
 
-// Create an AIAgent from the agent card
-AIAgent agent = agentCard.GetAIAgent();
-
-// Create a new conversation thread
-AgentThread thread = agent.GetNewThread();
-List<ChatMessage> messages = [];
+// Create an A2A client for sending messages
+using var httpClient = new HttpClient();
+using var a2aClient = new A2AClient(new Uri(serverUrl), httpClient);
 
 Console.WriteLine("Agent is ready! Type your message or ':q' to quit.");
 Console.WriteLine("──────────────────────────────────────────────────────────────");
@@ -73,9 +68,6 @@ try
             break;
         }
 
-        // Add user message to conversation
-        messages.Add(new ChatMessage(ChatRole.User, userInput));
-
         Console.ForegroundColor = ConsoleColor.Cyan;
         Console.Write("\nAgent: ");
         Console.ResetColor();
@@ -86,13 +78,32 @@ try
             if (agentCard.Capabilities?.Streaming == true)
             {
                 // Stream the response
-                await foreach (AgentRunResponseUpdate update in agent.RunStreamingAsync(messages, thread))
+                await foreach (StreamResponse streamResponse in a2aClient.SendStreamingMessageAsync(userInput, Role.User))
                 {
-                    foreach (AIContent content in update.Contents)
+                    if (streamResponse.StatusUpdate is { } statusUpdate)
                     {
-                        if (content is TextContent textContent)
+                        if (statusUpdate.Status.Message?.Parts is { } parts)
                         {
-                            Console.Write(textContent.Text);
+                            foreach (var part in parts)
+                            {
+                                if (part.Text is { } text)
+                                {
+                                    Console.Write(text);
+                                }
+                            }
+                        }
+                    }
+                    else if (streamResponse.ArtifactUpdate is { } artifactUpdate)
+                    {
+                        if (artifactUpdate.Artifact?.Parts is { } parts)
+                        {
+                            foreach (var part in parts)
+                            {
+                                if (part.Text is { } text)
+                                {
+                                    Console.Write(text);
+                                }
+                            }
                         }
                     }
                 }
@@ -101,8 +112,47 @@ try
             else
             {
                 // Non-streaming response
-                AgentRunResponse response = await agent.RunAsync(messages, thread);
-                Console.WriteLine(response.Text);
+                SendMessageResponse response = await a2aClient.SendMessageAsync(userInput, Role.User);
+                if (response.Task is { } task)
+                {
+                    // Get text from artifacts
+                    if (task.Artifacts is { } artifacts)
+                    {
+                        foreach (var artifact in artifacts)
+                        {
+                            foreach (var part in artifact.Parts)
+                            {
+                                if (part.Text is { } text)
+                                {
+                                    Console.Write(text);
+                                }
+                            }
+                        }
+                        Console.WriteLine();
+                    }
+                    else if (task.Status?.Message?.Parts is { } parts)
+                    {
+                        foreach (var part in parts)
+                        {
+                            if (part.Text is { } text)
+                            {
+                                Console.Write(text);
+                            }
+                        }
+                        Console.WriteLine();
+                    }
+                }
+                else if (response.Message is { } message)
+                {
+                    foreach (var part in message.Parts)
+                    {
+                        if (part.Text is { } text)
+                        {
+                            Console.Write(text);
+                        }
+                    }
+                    Console.WriteLine();
+                }
             }
         }
         catch (Exception ex)

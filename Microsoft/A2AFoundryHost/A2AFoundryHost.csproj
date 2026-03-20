@@ -7,13 +7,13 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="A2A" Version="0.3.3-preview" />
-    <PackageReference Include="A2A.AspNetCore" Version="0.3.3-preview" />
-    <PackageReference Include="Azure.AI.Agents.Persistent" Version="1.2.0-beta.7" />
-    <PackageReference Include="Azure.Identity" Version="1.17.1" />
-    <PackageReference Include="Microsoft.Agents.AI.AzureAI.Persistent" Version="1.0.0-preview.251125.1" />
-    <PackageReference Include="Microsoft.Agents.AI.Hosting.A2A.AspNetCore" Version="1.0.0-preview.251125.1" />
-    <PackageReference Include="Microsoft.Extensions.AI" Version="10.0.1" />
+    <PackageReference Include="A2A" Version="1.0.0-preview" />
+    <PackageReference Include="A2A.AspNetCore" Version="1.0.0-preview" />
+    <PackageReference Include="Azure.AI.Agents.Persistent" Version="1.2.0-beta.9" />
+    <PackageReference Include="Azure.Identity" Version="1.19.0" />
+    <PackageReference Include="Microsoft.Agents.AI" Version="1.0.0-rc4" />
+    <PackageReference Include="Microsoft.Agents.AI.AzureAI.Persistent" Version="1.0.0-preview.260311.1" />
+    <PackageReference Include="Microsoft.Extensions.AI" Version="10.3.0" />
   </ItemGroup>
 
 </Project>

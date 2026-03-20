@@ -1,6 +1,6 @@
 # A2A Foundry Agent Host
 
-A simple ASP.NET Core application that hosts an Azure AI Foundry agent via the A2A (Agent-to-Agent) protocol.
+An ASP.NET Core application that hosts an Azure AI Foundry agent via the [A2A (Agent-to-Agent) protocol](https://google.github.io/A2A/).
 
 ## Prerequisites
 
@@ -10,7 +10,7 @@ A simple ASP.NET Core application that hosts an Azure AI Foundry agent via the A
 
 ## Configuration
 
-Set the following environment variables:
+Update `appsettings.json` or set environment variables:
 
 ```powershell
 $env:AZURE_FOUNDRY_PROJECT_ENDPOINT = "https://your-project.services.ai.azure.com/api/projects/your-project"
@@ -26,73 +26,88 @@ If your agent uses MCP tools that require Bearer token authentication, configure
 ## Run
 
 ```bash
-dotnet run --urls "http://localhost:5000"
+dotnet run
 ```
+
+The server starts on the URLs configured in `Properties/launchSettings.json` (default: `https://localhost:57694` and `http://localhost:57695`).
 
 ## Endpoints
 
-- `/v1/card` - Agent card discovery
-- `/` - A2A message endpoint (JSON-RPC)
+| Endpoint | Description |
+|---|---|
+| `/.well-known/agent-card.json` | Agent card discovery (A2A v1) |
+| `/` | A2A JSON-RPC message endpoint |
 
 ## Testing
 
-### Get Agent Card
+Use the companion **A2AFoundryClient** project to test:
 
 ```bash
-curl -k https://localhost:57694/v1/card
+cd ../A2AFoundryClient
+dotnet run
 ```
 
-**Response:**
-```json
-{
-  "name": "Foundry-MCP-Microsoft-Learn",
-  "description": "Microsoft Learn Agent with A2A",
-  "version": "1.0.0",
-  "protocolVersion": "0.3.0",
-  "capabilities": {
-    "streaming": true,
-    "pushNotifications": false,
-    "stateTransitionHistory": false
-  },
-  "defaultInputModes": ["text"],
-  "defaultOutputModes": ["text"],
-  "preferredTransport": "JSONRPC"
-}
-```
-
-### Send a Message
+### Get Agent Card (curl)
 
 ```bash
-curl -k -X POST https://localhost:57694/ \
+curl http://localhost:57695/.well-known/agent-card.json
+```
+
+### Send a Message (curl)
+
+```bash
+curl -X POST http://localhost:57695/ \
   -H "Content-Type: application/json" \
   -d '{
     "jsonrpc": "2.0",
-    "method": "message/send",
+    "method": "SendMessage",
     "id": "1",
     "params": {
       "message": {
-        "kind": "message",
-        "role": "user",
-        "parts": [{"kind": "text", "text": "Hello, what can you help me with?"}],
-        "messageId": "test-123"
+        "role": "ROLE_USER",
+        "parts": [{"text": "Hello, what can you help me with?"}]
       }
     }
   }'
 ```
 
-**Response:**
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "1",
-  "result": {
-    "kind": "message",
-    "role": "agent",
-    "parts": [{"kind": "text", "text": "Hello! I'm here to help with..."}],
-    "messageId": "run_xxx",
-    "contextId": "xxx"
-  }
-}
-```
+## A2A v1 SDK — Known Limitations
 
-> **Note:** Use `-k` flag to skip SSL certificate verification for local development.
+This project uses the `A2A` and `A2A.AspNetCore` NuGet packages at version **1.0.0-preview**, which implement the **A2A v1 specification**. Be aware of the following:
+
+### Not compatible with the Python A2A Inspector
+
+The A2A v1 spec introduced breaking changes from v0.3. The Python-based [A2A Inspector](https://github.com/google/A2A/tree/main/samples/python/hosts/inspector) still uses v0.3 conventions and **will not work** with this server. Key differences:
+
+| Area | v0.3 (Python Inspector) | v1 (This project) |
+|---|---|---|
+| JSON-RPC methods | `message/send`, `message/stream` | `SendMessage`, `SendStreamingMessage` |
+| Agent card path | `/.well-known/agent.json` | `/.well-known/agent-card.json` |
+| Agent card `url` field | Required top-level field | Removed (use `SupportedInterfaces`) |
+| Enum values | kebab-case (`working`) | SCREAMING_SNAKE_CASE (`TASK_STATE_WORKING`) |
+| Part model | `TextPart`, `FilePart` subclasses | Single `Part` class with `ContentCase` |
+
+See the [migration guide](https://github.com/a2aproject/a2a-dotnet/blob/main/docs/migration-guide-v1.md) for full details.
+
+### Package version constraints
+
+- `Microsoft.Extensions.AI` must be pinned to **10.3.0** (not 10.4.x) to match the transitive dependency from `Microsoft.Agents.AI` 1.0.0-rc4. Using 10.4.x causes a runtime `TypeLoadException` for `McpServerToolApprovalResponseContent`.
+- `Microsoft.Agents.AI` is pulled transitively at **1.0.0-rc4** by `Microsoft.Agents.AI.AzureAI.Persistent`. Adding it explicitly at `1.0.0-rc4` avoids version conflicts.
+
+## Architecture
+
+```
+┌─────────────────────┐         ┌─────────────────────┐
+│   A2AFoundryClient  │  A2A    │   A2AFoundryHost    │
+│   (.NET Client)     │────────►│   (This Project)    │
+│                     │  v1     │                     │
+│  - A2AClient        │         │  - FoundryAgentHandler
+│  - Interactive CLI  │         │  - AutoApprovingAgent
+└─────────────────────┘         └─────────────────────┘
+                                          │
+                                          ▼
+                                ┌─────────────────────┐
+                                │  Azure AI Foundry   │
+                                │  Persistent Agent   │
+                                └─────────────────────┘
+```
