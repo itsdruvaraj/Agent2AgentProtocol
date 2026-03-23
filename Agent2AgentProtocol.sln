@@ -2,11 +2,17 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
 VisualStudioVersion = 17.5.2.0
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Microsoft", "Microsoft", "{C3500E5F-A296-6C57-D65F-9820BC3035C7}"
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "MicrosoftFoundry.Classic", "MicrosoftFoundry.Classic", "{C3500E5F-A296-6C57-D65F-9820BC3035C7}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "A2AFoundryHost", "Microsoft\A2AFoundryHost\A2AFoundryHost.csproj", "{2D901E58-5A56-F0F4-2A06-91D488AE4402}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "A2AFoundryHost", "MicrosoftFoundry.Classic\A2AFoundryHost\A2AFoundryHost.csproj", "{2D901E58-5A56-F0F4-2A06-91D488AE4402}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "A2AFoundryClient", "Microsoft\A2AFoundryClient\A2AFoundryClient.csproj", "{8B4E7A3C-1D2F-4E5A-9C8B-6F7E0A1B2D3E}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "A2AFoundryClient", "MicrosoftFoundry.Classic\A2AFoundryClient\A2AFoundryClient.csproj", "{8B4E7A3C-1D2F-4E5A-9C8B-6F7E0A1B2D3E}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "MicrosoftFoundry.DotNet", "MicrosoftFoundry.DotNet", "{D4A1B2C3-E5F6-7890-ABCD-EF1234567890}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "A2AFoundryHost", "MicrosoftFoundry\DotNet\A2AFoundryHost\A2AFoundryHost.csproj", "{A1B2C3D4-E5F6-7890-1234-567890ABCDEF}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "A2AFoundryClient", "MicrosoftFoundry\DotNet\A2AFoundryClient\A2AFoundryClient.csproj", "{B2C3D4E5-F678-9012-3456-7890ABCDEF12}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -22,6 +28,14 @@ Global
 		{8B4E7A3C-1D2F-4E5A-9C8B-6F7E0A1B2D3E}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{8B4E7A3C-1D2F-4E5A-9C8B-6F7E0A1B2D3E}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{8B4E7A3C-1D2F-4E5A-9C8B-6F7E0A1B2D3E}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A1B2C3D4-E5F6-7890-1234-567890ABCDEF}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A1B2C3D4-E5F6-7890-1234-567890ABCDEF}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A1B2C3D4-E5F6-7890-1234-567890ABCDEF}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A1B2C3D4-E5F6-7890-1234-567890ABCDEF}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B2C3D4E5-F678-9012-3456-7890ABCDEF12}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B2C3D4E5-F678-9012-3456-7890ABCDEF12}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B2C3D4E5-F678-9012-3456-7890ABCDEF12}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B2C3D4E5-F678-9012-3456-7890ABCDEF12}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -29,6 +43,8 @@ Global
 	GlobalSection(NestedProjects) = preSolution
 		{2D901E58-5A56-F0F4-2A06-91D488AE4402} = {C3500E5F-A296-6C57-D65F-9820BC3035C7}
 		{8B4E7A3C-1D2F-4E5A-9C8B-6F7E0A1B2D3E} = {C3500E5F-A296-6C57-D65F-9820BC3035C7}
+		{A1B2C3D4-E5F6-7890-1234-567890ABCDEF} = {D4A1B2C3-E5F6-7890-ABCD-EF1234567890}
+		{B2C3D4E5-F678-9012-3456-7890ABCDEF12} = {D4A1B2C3-E5F6-7890-ABCD-EF1234567890}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {685937C5-3761-4EB6-B2FB-55E5C7E27772}

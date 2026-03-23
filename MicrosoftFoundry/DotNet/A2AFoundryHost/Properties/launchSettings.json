@@ -1,0 +1,12 @@
+{
+  "profiles": {
+    "A2AFoundryHost": {
+      "commandName": "Project",
+      "launchBrowser": true,
+      "applicationUrl": "https://localhost:57696;http://localhost:57697",
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development"
+      }
+    }
+  }
+}
