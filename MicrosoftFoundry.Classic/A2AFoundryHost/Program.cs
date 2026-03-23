@@ -1,14 +1,11 @@
 // Simple A2A Host for Azure AI Foundry Agent
-#pragma warning disable MEAI001 // McpServerToolApprovalRequestContent is experimental
 
 using A2A;
 using A2A.AspNetCore;
 using Azure.AI.Agents.Persistent;
 using Azure.Identity;
-using Microsoft.Agents.AI;
-using Microsoft.Extensions.AI;
-using System.Runtime.CompilerServices;
 using System.Text;
+using System.Text.Json;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddHttpClient().AddLogging();
@@ -20,7 +17,9 @@ string endpoint = builder.Configuration["AZURE_FOUNDRY_PROJECT_ENDPOINT"]
     ?? throw new InvalidOperationException("AZURE_FOUNDRY_PROJECT_ENDPOINT is required");
 string agentId = builder.Configuration["AZURE_FOUNDRY_AGENT_ID"]
     ?? throw new InvalidOperationException("AZURE_FOUNDRY_AGENT_ID is required");
-string? mcpBearerToken = builder.Configuration["MCP_BEARER_TOKEN"]; // Optional Bearer token for MCP tools
+string? mcpBearerToken = builder.Configuration["MCP_BEARER_TOKEN"]; // Optional fallback Bearer token for MCP tools
+string mcpServerLabel = builder.Configuration["MCP_SERVER_LABEL"] ?? "custom_mcp_server";
+string mcpApprovalMode = builder.Configuration["MCP_APPROVAL_MODE"] ?? "never";
 
 // Create the Foundry agent
 var persistentAgentsClient = new PersistentAgentsClient(endpoint, new AzureCliCredential());
@@ -41,19 +40,16 @@ if (persistentAgent.Tools?.Count > 0)
     }
 }
 
-AIAgent agent = await persistentAgentsClient.GetAIAgentAsync(persistentAgent.Id);
-
-// Note: Bearer token for MCP tools must be configured in Azure AI Foundry when creating/updating the agent.
-// Runtime header injection for pre-existing agents is not supported in the current .NET SDK.
-// The MCP_BEARER_TOKEN config is reserved for future use or if implementing lower-level API calls.
+// MCP bearer token is expected from A2A client via metadata (mcp_bearer_token).
+// Host config MCP_BEARER_TOKEN serves only as a fallback.
 if (!string.IsNullOrEmpty(mcpBearerToken))
 {
-    Console.WriteLine("[Warning] MCP_BEARER_TOKEN is set but runtime header injection for existing agents is not currently supported.");
-    Console.WriteLine("          Configure MCP tool headers in Azure AI Foundry instead, or create a new agent with HostedMcpServerTool.AuthorizationToken.");
+    Console.WriteLine($"[Config] Fallback MCP bearer token configured ({mcpBearerToken.Length} chars)");
 }
-
-// Create an auto-approving wrapper to handle MCP tool approvals
-var autoApprovingAgent = new AutoApprovingAgentWrapper(agent);
+else
+{
+    Console.WriteLine("[Config] No fallback MCP_BEARER_TOKEN set. Token must come from A2A client metadata.");
+}
 
 // Define the agent card for A2A discovery
 var agentCard = new AgentCard
@@ -82,7 +78,8 @@ var agentCard = new AgentCard
 };
 
 // Create A2A server with our agent handler
-var agentHandler = new FoundryAgentHandler(autoApprovingAgent);
+// MCP bearer token comes from A2A client metadata per-request
+var agentHandler = new FoundryAgentHandler(persistentAgentsClient, persistentAgent, mcpBearerToken, mcpServerLabel, mcpApprovalMode);
 var a2aServer = new A2AServer(
     agentHandler,
     new InMemoryTaskStore(),
@@ -102,59 +99,117 @@ Console.WriteLine("  - A2A Messages: /");
 
 await app.RunAsync();
 
-// IAgentHandler implementation that bridges AIAgent to A2A protocol
+// IAgentHandler implementation that bridges Foundry Persistent Agents to A2A protocol
+// Reads MCP bearer token from A2A client metadata per-request
 public class FoundryAgentHandler : IAgentHandler
 {
-    private readonly AIAgent _agent;
+    private readonly PersistentAgentsClient _client;
+    private readonly PersistentAgent _agent;
+    private readonly string? _fallbackBearerToken;
+    private readonly string _defaultServerLabel;
+    private readonly string _defaultApprovalMode;
 
-    public FoundryAgentHandler(AIAgent agent) => _agent = agent;
+    public FoundryAgentHandler(PersistentAgentsClient client, PersistentAgent agent, string? fallbackBearerToken, string defaultServerLabel, string defaultApprovalMode)
+    {
+        _client = client;
+        _agent = agent;
+        _fallbackBearerToken = fallbackBearerToken;
+        _defaultServerLabel = defaultServerLabel;
+        _defaultApprovalMode = defaultApprovalMode;
+    }
 
     public async Task ExecuteAsync(RequestContext context, AgentEventQueue events, CancellationToken cancellationToken)
     {
         var taskUpdater = new TaskUpdater(events, context.TaskId ?? Guid.NewGuid().ToString(), context.ContextId ?? "");
         await taskUpdater.StartWorkAsync(new Message { Role = Role.Agent, Parts = [Part.FromText("Processing...")] }, cancellationToken);
 
+        PersistentAgentThread? thread = null;
+
         try
         {
-            var session = await _agent.CreateSessionAsync(cancellationToken);
-            var userMessage = new ChatMessage(ChatRole.User, context.UserText ?? "");
-
-            if (context.StreamingResponse)
+            // DEBUG: Dump all metadata received from A2A client
+            Console.WriteLine($"[Handler] === METADATA DEBUG ===");
+            Console.WriteLine($"[Handler] context.Metadata is null: {context.Metadata is null}");
+            Console.WriteLine($"[Handler] context.Metadata count: {context.Metadata?.Count ?? 0}");
+            if (context.Metadata is not null)
             {
-                var fullText = new StringBuilder();
-                await foreach (var update in _agent.RunStreamingAsync(userMessage, session, cancellationToken: cancellationToken))
+                foreach (var kvp in context.Metadata)
                 {
-                    if (update.Text is { } text)
-                    {
-                        fullText.Append(text);
-                        await events.EnqueueStatusUpdateAsync(new TaskStatusUpdateEvent
-                        {
-                            TaskId = taskUpdater.TaskId,
-                            ContextId = taskUpdater.ContextId,
-                            Status = new A2A.TaskStatus
-                            {
-                                State = TaskState.Working,
-                                Message = new Message { Role = Role.Agent, Parts = [Part.FromText(text)] }
-                            }
-                        }, cancellationToken);
-                    }
+                    var valPreview = kvp.Value.ToString();
+                    if (valPreview.Length > 50) valPreview = valPreview[..50] + "...";
+                    Console.WriteLine($"[Handler]   key='{kvp.Key}', valueKind={kvp.Value.ValueKind}, value={valPreview}");
                 }
+            }
+            Console.WriteLine($"[Handler] === END METADATA DEBUG ===");
 
-                await taskUpdater.CompleteAsync(new Message
-                {
-                    Role = Role.Agent,
-                    Parts = [Part.FromText(fullText.ToString())]
-                }, cancellationToken);
-            }
-            else
+            // Read MCP config from A2A metadata (sent by client per-request)
+            string? bearerToken = GetMetadataString(context, "mcp_bearer_token") ?? _fallbackBearerToken;
+            string approvalMode = GetMetadataString(context, "mcp_approval_mode") ?? _defaultApprovalMode;
+            string mcpServerLabel = GetMetadataString(context, "mcp_server_label") ?? _defaultServerLabel;
+
+            Console.WriteLine($"[Handler] Resolved - approval_mode: {approvalMode}, server_label: {mcpServerLabel}");
+            Console.WriteLine($"[Handler] Bearer token: {(bearerToken is not null ? $"received ({bearerToken.Length} chars, starts with: {bearerToken[..Math.Min(20, bearerToken.Length)]}...)" : "NULL - NOT FOUND")}");
+
+            if (bearerToken is null)
             {
-                var response = await _agent.RunAsync(userMessage, session, cancellationToken: cancellationToken);
-                await taskUpdater.CompleteAsync(new Message
+                Console.WriteLine("[Handler] ERROR: No MCP bearer token. MCP tools will fail.");
+            }
+
+            // Create a thread for this request
+            thread = await _client.Threads.CreateThreadAsync(cancellationToken: cancellationToken);
+            Console.WriteLine($"[Handler] Thread created: {thread.Id}");
+
+            // Add user message to thread
+            await _client.Messages.CreateMessageAsync(
+                thread.Id,
+                MessageRole.User,
+                context.UserText ?? "",
+                cancellationToken: cancellationToken);
+
+            // Build MCP tool resources with bearer token and approval mode
+            ToolResources? toolResources = null;
+            if (bearerToken is not null)
+            {
+                var mcpToolResource = new MCPToolResource(mcpServerLabel)
+                {
+                    RequireApproval = new MCPApproval(approvalMode)
+                };
+                mcpToolResource.UpdateHeader("Authorization", $"Bearer {bearerToken}");
+                toolResources = mcpToolResource.ToToolResources();
+                Console.WriteLine($"[Handler] MCPToolResource configured with bearer token and approval_mode={approvalMode}");
+            }
+
+            // Create and run the agent
+            ThreadRun run = await _client.Runs.CreateRunAsync(
+                thread,
+                _agent,
+                toolResources,
+                cancellationToken: cancellationToken);
+
+            // Wait for completion
+            run = await WaitForRunCompletionAsync(thread.Id, run.Id, cancellationToken);
+
+            if (run.Status != RunStatus.Completed)
+            {
+                string errorMsg = run.LastError?.Message ?? $"Run failed with status: {run.Status}";
+                Console.Error.WriteLine($"[Handler] Run failed: {errorMsg}");
+                await taskUpdater.FailAsync(new Message
                 {
                     Role = Role.Agent,
-                    Parts = [Part.FromText(response.Text ?? "")]
+                    Parts = [Part.FromText($"Error: {errorMsg}")]
                 }, cancellationToken);
+                return;
             }
+
+            // Get the latest assistant response
+            string responseText = await GetLatestResponseAsync(thread.Id, cancellationToken);
+            Console.WriteLine($"[Handler] Got response: {responseText[..Math.Min(100, responseText.Length)]}...");
+
+            await taskUpdater.CompleteAsync(new Message
+            {
+                Role = Role.Agent,
+                Parts = [Part.FromText(responseText)]
+            }, cancellationToken);
         }
         catch (Exception ex)
         {
@@ -172,94 +227,61 @@ public class FoundryAgentHandler : IAgentHandler
         events.Complete();
         return Task.CompletedTask;
     }
-}
 
-// Auto-approving wrapper that automatically approves MCP tool calls
-public class AutoApprovingAgentWrapper : DelegatingAIAgent
-{
-    public AutoApprovingAgentWrapper(AIAgent innerAgent) : base(innerAgent) { }
-
-    protected override async Task<AgentResponse> RunCoreAsync(
-        IEnumerable<ChatMessage> messages,
-        AgentSession? session = null,
-        AgentRunOptions? options = null,
-        CancellationToken cancellationToken = default)
+    private async Task<ThreadRun> WaitForRunCompletionAsync(string threadId, string runId, CancellationToken cancellationToken)
     {
-        var response = await InnerAgent.RunAsync(messages, session, options, cancellationToken);
-        
-        // Keep running until we get a final response (no more approval requests)
-        var approvalRequests = GetApprovalRequests(response);
-        while (approvalRequests.Count > 0)
+        ThreadRun run;
+        do
         {
-            Console.WriteLine($"[AutoApprove] Auto-approving {approvalRequests.Count} tool call(s)");
+            await Task.Delay(500, cancellationToken);
+            run = await _client.Runs.GetRunAsync(threadId, runId, cancellationToken);
 
-            // Create approval responses
-            var approvalMessages = approvalRequests
-                .Select(req =>
+            // Handle RequiresAction — auto-approve MCP tool calls
+            if (run.Status == RunStatus.RequiresAction && run.RequiredAction is SubmitToolOutputsAction toolAction)
+            {
+                Console.WriteLine($"[Handler] Run requires action — auto-approving {toolAction.ToolCalls.Count} tool call(s)");
+
+                var toolOutputs = new List<ToolOutput>();
+                foreach (var toolCall in toolAction.ToolCalls)
                 {
-                    LogApproval(req);
-                    return new ChatMessage(ChatRole.User, [req.CreateResponse(approved: true)]);
-                })
-                .ToList();
+                    Console.WriteLine($"[Handler]   Auto-approving tool: {toolCall.Id}");
+                    toolOutputs.Add(new ToolOutput(toolCall.Id, "approved"));
+                }
 
-            // Continue the conversation with approvals
-            response = await InnerAgent.RunAsync(approvalMessages, session, options, cancellationToken);
-            approvalRequests = GetApprovalRequests(response);
-        }
-
-        Console.WriteLine($"[AutoApprove] Final response: {response.Text?.Substring(0, Math.Min(100, response.Text?.Length ?? 0))}...");
-        return response;
+                run = await _client.Runs.SubmitToolOutputsToRunAsync(run, toolOutputs, cancellationToken: cancellationToken);
+            }
+        } while (run.Status == RunStatus.Queued || run.Status == RunStatus.InProgress);
+        return run;
     }
 
-    protected override async IAsyncEnumerable<AgentResponseUpdate> RunCoreStreamingAsync(
-        IEnumerable<ChatMessage> messages,
-        AgentSession? session = null,
-        AgentRunOptions? options = null,
-        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    private Task<string> GetLatestResponseAsync(string threadId, CancellationToken cancellationToken)
     {
-        var pendingApprovals = new List<McpServerToolApprovalRequestContent>();
-        
-        await foreach (var update in InnerAgent.RunStreamingAsync(messages, session, options, cancellationToken))
+        var messages = _client.Messages.GetMessages(threadId, limit: 1, order: ListSortOrder.Descending);
+        foreach (var msg in messages)
         {
-            // Collect any approval requests from update contents
-            pendingApprovals.AddRange(update.Contents.OfType<McpServerToolApprovalRequestContent>());
-            yield return update;
-        }
-
-        // If we have pending approvals, auto-approve and continue
-        while (pendingApprovals.Count > 0)
-        {
-            Console.WriteLine($"[AutoApprove-Streaming] Auto-approving {pendingApprovals.Count} tool call(s)");
-
-            var approvalMessages = pendingApprovals
-                .Select(req =>
-                {
-                    LogApproval(req);
-                    return new ChatMessage(ChatRole.User, [req.CreateResponse(approved: true)]);
-                })
-                .ToList();
-
-            pendingApprovals.Clear();
-
-            // Continue with approvals
-            await foreach (var update in InnerAgent.RunStreamingAsync(approvalMessages, session, options, cancellationToken))
+            if (msg.Role == MessageRole.Agent)
             {
-                pendingApprovals.AddRange(update.Contents.OfType<McpServerToolApprovalRequestContent>());
-                yield return update;
+                var sb = new StringBuilder();
+                foreach (var content in msg.ContentItems)
+                {
+                    if (content is MessageTextContent textContent)
+                    {
+                        sb.Append(textContent.Text);
+                    }
+                }
+                return Task.FromResult(sb.ToString());
             }
         }
+        return Task.FromResult("(No response)");
     }
 
-    private static List<McpServerToolApprovalRequestContent> GetApprovalRequests(AgentResponse response)
-        => response.Messages
-            .SelectMany(m => m.Contents)
-            .OfType<McpServerToolApprovalRequestContent>()
-            .ToList();
-
-    private static void LogApproval(McpServerToolApprovalRequestContent req)
+    private static string? GetMetadataString(RequestContext context, string key)
     {
-        var name = $"{req.ToolCall.ServerName}/{req.ToolCall.ToolName}";
-        Console.WriteLine($"  - Approving: {name}");
+        if (context.Metadata?.TryGetValue(key, out var value) == true)
+        {
+            return value.ValueKind == JsonValueKind.String ? value.GetString() : value.GetRawText();
+        }
+        return null;
     }
 }
 

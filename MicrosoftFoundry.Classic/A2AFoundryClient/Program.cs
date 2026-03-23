@@ -2,22 +2,34 @@
 // This client connects to the A2AFoundryHost server and invokes the agent using the A2A protocol
 
 using A2A;
+using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 
 // Configuration
 IConfigurationRoot configuration = new ConfigurationBuilder()
+    .SetBasePath(AppContext.BaseDirectory)
     .AddJsonFile("appsettings.json", optional: true)
     .AddEnvironmentVariables()
     .AddUserSecrets<Program>(optional: true)
     .Build();
 
 string serverUrl = configuration["A2A_SERVER_URL"] ?? "http://localhost:57695";
+string mcpApprovalMode = configuration["MCP_APPROVAL_MODE"] ?? "never";
+string? mcpBearerToken = configuration["MCP_BEARER_TOKEN"];
+
+// Treat empty string as null
+if (string.IsNullOrWhiteSpace(mcpBearerToken))
+{
+    mcpBearerToken = null;
+}
 
 Console.WriteLine("╔══════════════════════════════════════════════════════════╗");
 Console.WriteLine("║        A2A Foundry Client - Agent-to-Agent Protocol      ║");
 Console.WriteLine("╚══════════════════════════════════════════════════════════╝");
 Console.WriteLine();
 Console.WriteLine($"Connecting to A2A server at: {serverUrl}");
+Console.WriteLine($"MCP approval mode: {mcpApprovalMode}");
+Console.WriteLine($"MCP bearer token: {(mcpBearerToken is not null ? $"configured ({mcpBearerToken.Length} chars, starts: {mcpBearerToken[..Math.Min(20, mcpBearerToken.Length)]}...)" : "NOT SET - MCP tools will fail!")}");
 Console.WriteLine();
 
 // Create the A2A card resolver using the well-known agent card location
@@ -74,11 +86,40 @@ try
 
         try
         {
+            // Build A2A metadata with MCP config
+            var metadata = new Dictionary<string, JsonElement>
+            {
+                ["mcp_approval_mode"] = JsonSerializer.SerializeToElement(mcpApprovalMode)
+            };
+
+            // Always log what we're sending
+            Console.WriteLine($"[DEBUG] mcpBearerToken is null: {mcpBearerToken is null}");
+            Console.WriteLine($"[DEBUG] mcpBearerToken length: {mcpBearerToken?.Length ?? 0}");
+
+            if (mcpBearerToken is not null)
+            {
+                metadata["mcp_bearer_token"] = JsonSerializer.SerializeToElement(mcpBearerToken);
+                Console.WriteLine($"[DEBUG] Added mcp_bearer_token to metadata ({mcpBearerToken.Length} chars)");
+            }
+            else
+            {
+                Console.WriteLine("[DEBUG] WARNING: No bearer token to send!");
+            }
+
+            Console.WriteLine($"[DEBUG] Metadata keys being sent: {string.Join(", ", metadata.Keys)}");
+
             // Check if streaming is supported
             if (agentCard.Capabilities?.Streaming == true)
             {
+                // Build full request with metadata
+                var request = new SendMessageRequest
+                {
+                    Message = new Message { Role = Role.User, Parts = [Part.FromText(userInput)] },
+                    Metadata = metadata
+                };
+
                 // Stream the response
-                await foreach (StreamResponse streamResponse in a2aClient.SendStreamingMessageAsync(userInput, Role.User))
+                await foreach (StreamResponse streamResponse in a2aClient.SendStreamingMessageAsync(request))
                 {
                     if (streamResponse.StatusUpdate is { } statusUpdate)
                     {
@@ -111,8 +152,15 @@ try
             }
             else
             {
+                // Build full request with metadata
+                var request = new SendMessageRequest
+                {
+                    Message = new Message { Role = Role.User, Parts = [Part.FromText(userInput)] },
+                    Metadata = metadata
+                };
+
                 // Non-streaming response
-                SendMessageResponse response = await a2aClient.SendMessageAsync(userInput, Role.User);
+                SendMessageResponse response = await a2aClient.SendMessageAsync(request);
                 if (response.Task is { } task)
                 {
                     // Get text from artifacts
